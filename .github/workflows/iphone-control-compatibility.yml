@@ -1,0 +1,71 @@
+name: Build unsigned iPhone control compatibility app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Standard hosted runners are free for public repositories. Do not silently
+    # switch to a private repository or a paid/larger runner.
+    if: github.event.repository.private == false
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Check out the reviewed upstream source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: EliotAndres/iphone-use-app
+          ref: 20ac0665eea956f8fc3f96115f781b0ee9cdde9e
+          persist-credentials: false
+      - name: Prepare Rust for iOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal
+          fi
+          source "$HOME/.cargo/env"
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-ios
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build the device-control library
+        run: bash scripts/build-idevice.sh
+      - name: Compile without Apple credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project iPhoneUse.xcodeproj -scheme iPhoneUse \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/iphone-control-build" \
+            BUILTIN_VPN=NO CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' build
+      - name: Package for Windows signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/iphone-control-build/Build/Products/Release-iphoneos/iPhoneUse.app"
+          test -d "$app"
+          stage="$RUNNER_TEMP/iphone-control-package"
+          mkdir -p "$stage/Payload" "$GITHUB_WORKSPACE/output"
+          cp -R "$app" "$stage/Payload/"
+          # This test uses LocalDevVPN separately. Free-account signing does not
+          # need the bundled VPN or widget extensions.
+          rm -rf "$stage/Payload/iPhoneUse.app/PlugIns"
+          cd "$stage"
+          zip -qry "$GITHUB_WORKSPACE/output/iphone-control-unsigned.ipa" Payload
+          cd "$GITHUB_WORKSPACE/output"
+          shasum -a 256 iphone-control-unsigned.ipa > SHA256SUMS
+      - name: Save the unsigned test app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: iphone-control-unsigned
+          path: output/
+          if-no-files-found: error
+          retention-days: 3
+

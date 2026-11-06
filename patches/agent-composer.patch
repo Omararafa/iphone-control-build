@@ -1,8 +1,8 @@
 diff --git a/iPhoneUse/Agent/AgentView.swift b/iPhoneUse/Agent/AgentView.swift
-index 67d29a2..04ecae4 100644
+index 67d29a2..db1b99d 100644
 --- a/iPhoneUse/Agent/AgentView.swift
 +++ b/iPhoneUse/Agent/AgentView.swift
-@@ -238,30 +238,43 @@ struct AgentView: View {
+@@ -238,39 +238,63 @@ struct AgentView: View {
          composerEnabled && (voice.state == .recording || voice.state == .idle && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
      }
  
@@ -60,8 +60,31 @@ index 67d29a2..04ecae4 100644
          }
 +    }
 +
-+    private var composer: some View {
++    private var composerSurface: some View {
 +        composerRow
          .padding(.horizontal, 6)
          .padding(.vertical, 10)
          .padding(.leading, 8)
+         .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+         .onTapGesture { composerFocused = true }
+         .glass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+-        .sensoryFeedback(.start, trigger: voice.state) { _, new in new == .recording }
+-        .sensoryFeedback(.stop, trigger: voice.state) { old, _ in old == .recording }
+-        .sensoryFeedback(.error, trigger: voice.error) { _, new in new != nil }
++    }
++
++    private var composerRecordingFeedback: some View {
++        composerSurface
++            .sensoryFeedback(SensoryFeedback.start, trigger: voice.state,
++                condition: { (_: VoiceRecorder.State, new: VoiceRecorder.State) -> Bool in new == .recording })
++            .sensoryFeedback(SensoryFeedback.stop, trigger: voice.state,
++                condition: { (old: VoiceRecorder.State, _: VoiceRecorder.State) -> Bool in old == .recording })
++    }
++
++    private var composer: some View {
++        composerRecordingFeedback
++        .sensoryFeedback(SensoryFeedback.error, trigger: voice.error,
++            condition: { (_: String?, new: String?) -> Bool in new != nil })
+         .padding(.horizontal, 12)
+         .padding(.bottom, 8)
+         .onChange(of: agent.question) { _, question in

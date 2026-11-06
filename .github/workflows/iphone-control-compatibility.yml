@@ -20,6 +20,13 @@ jobs:
           repository: EliotAndres/iphone-use-app
           ref: 20ac0665eea956f8fc3f96115f781b0ee9cdde9e
           persist-credentials: false
+      - name: Check out build patches
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: build-recipe
+          persist-credentials: false
+      - name: Apply compiler compatibility patch
+        run: git apply build-recipe/patches/agent-composer.patch
       - name: Prepare Rust for iOS
         shell: bash
         run: |

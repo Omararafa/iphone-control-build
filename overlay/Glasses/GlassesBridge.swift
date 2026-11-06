@@ -4,12 +4,13 @@ import Combine
 import CryptoKit
 import UIKit
 import Security
+import CoreVideo
 
 @MainActor final class GlassesBridge: ObservableObject {
     static let shared = GlassesBridge()
     @Published var relayURL: String = UserDefaults.standard.string(forKey: "glassesRelayURL") ?? ""
     @Published var claimCode = ""
-    @Published private(set) var status = "Stopped"
+    @Published private(set) var status = "Stopped" { didSet { recordStatus() } }
     @Published private(set) var running = false
     @Published private(set) var live = false
     @Published private(set) var pairingCode: String?
@@ -27,6 +28,7 @@ import Security
     private var runID = UUID()
     private var origin = ""
     private var relayOpen = false
+    private var serverAuthenticated = false
     private var pairTried = false
     private var lastPair = Date.distantPast
     private var ephemeral: P256.KeyAgreement.PrivateKey?
@@ -64,7 +66,6 @@ import Security
             guard running, runID == id, !Task.isCancelled else { return }
             guard Connection.shared.isReady else { stop(); status = "Reconnect LocalDevVPN in Phone Connection first"; return }
             BackgroundAudioManager.shared.requestStart()
-            BackgroundLocationManager.shared.requestStart()
             keepAliveStarted = true
             UIApplication.shared.isIdleTimerDisabled = true
             startTicker()
@@ -83,7 +84,6 @@ import Security
         registrationCode = nil; relayOpen = false
         if keepAliveStarted {
             BackgroundAudioManager.shared.requestStop()
-            BackgroundLocationManager.shared.requestStop()
             keepAliveStarted = false
         }
         UIApplication.shared.isIdleTimerDisabled = false
@@ -92,10 +92,12 @@ import Security
 
     func forgetGlasses() {
         stop()
-        if !origin.isEmpty { GlassesSecrets.delete("pair:" + origin) }
+        let savedOrigin = origin.isEmpty ? relayURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) : origin
+        if !savedOrigin.isEmpty { GlassesSecrets.delete("pair:" + savedOrigin) }
         status = "Glasses forgotten; pair again next time"
     }
     func claim() {
+        guard serverAuthenticated else { status = "Approve this phone on the server first"; return }
         let code = claimCode.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard code.range(of: "^[A-Z0-9]{3}-[A-Z0-9]{3}$", options: .regularExpression) != nil else {
             status = "Enter the ABC-DEF connect code shown on the glasses"; return
@@ -110,6 +112,7 @@ import Security
             let ws = URLSession.shared.webSocketTask(with: url)
             ws.maximumMessageSize = 131072
             socket = ws
+            serverAuthenticated = false
             ws.resume()
             if let token: String = GlassesSecrets.read("token:" + origin, as: String.self) {
                 send(["type": "auth", "token": token])
@@ -156,7 +159,11 @@ import Security
             catch { stop(); status = "Could not save server registration securely"; return }
             registrationCode = nil
             socket?.cancel(with: .normalClosure, reason: nil)
-        case "authenticated": status = live ? "Sharing with your glasses" : "Ready — choose Phone on the glasses"
+        case "authenticated":
+            serverAuthenticated = true
+            status = live ? "Sharing with your glasses" : "Ready — choose Phone on the glasses"
+        case "pairFailed" where !serverAuthenticated:
+            stop(); status = "Server registration was declined or expired; tap Start to retry"
         case "authFailed", "forgotten":
             guard !relayOpen else { resetHandshake(); return }
             GlassesSecrets.delete("token:" + origin)
@@ -293,7 +300,8 @@ import Security
             while running && !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
                 tick += 1
-                if tick % 15 == 0 { send(["type": "ping", "t": Date().timeIntervalSince1970 * 1000]) }
+                if tick % 5 == 0 { recordStatus() }
+                if tick % 15 == 0 && serverAuthenticated { send(["type": "ping", "t": Date().timeIntervalSince1970 * 1000]) }
                 if live && Date().timeIntervalSince(lastHeard) > 15 {
                     endSession("silent"); status = "Lost contact with the glasses"
                 }
@@ -301,6 +309,15 @@ import Security
                     endSession("capture"); status = "Phone locked — sharing stopped"
                 }
             }
+        }
+    }
+    /// Local diagnostic only: no tokens, pairing codes, SDP, screen images, or text input.
+    private func recordStatus() {
+        let report: [String: Any] = ["build": "iPhone Glasses 1", "status": status,
+            "running": running, "live": live, "frames": frames, "controls": controls,
+            "updated": ISO8601DateFormatter().string(from: Date())]
+        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
+            try? data.write(to: URL.documentsDirectory.appendingPathComponent("glasses-status.json"), options: .atomic)
         }
     }
     private func startCapture(_ id: UUID) {
@@ -319,7 +336,7 @@ import Security
                 guard live, generation == id, !Task.isCancelled else { return }
                 if let buffer { failures = 0; frames += 1; rtc?.frame(buffer) }
                 else { failures += 1 }
-                if failures >= 3 { endSession("capture"); status = "Screen capture stopped; reconnect Phone Connection"; return }
+                if failures >= 3 { stop(); status = "Screen capture stopped; reconnect Phone Connection, then Start again"; return }
                 do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
             }
         }
@@ -345,8 +362,7 @@ import Security
         case "tap", "doubleTap":
             guard let p = point() else { return }
             operation = {
-                try DeviceSession.shared.agentTouch(from: p, to: p)
-                if type == "doubleTap" { Thread.sleep(forTimeInterval: 0.1); try DeviceSession.shared.agentTouch(from: p, to: p) }
+                try DeviceSession.shared.glassesGesture(from: p, to: p, taps: type == "doubleTap" ? 2 : 1)
             }
         case "touch":
             guard let p = point(), let phase = o["phase"] as? String else { return }
@@ -355,18 +371,18 @@ import Security
             guard phase == "up", let start = touchStart else { return }
             touchStart = nil
             let ms = UInt64(min(2000, max(0, Date().timeIntervalSince(start.1) * 1000)))
-            operation = { try DeviceSession.shared.agentTouch(from: start.0, to: p, holdMs: ms) }
+            operation = { try DeviceSession.shared.glassesGesture(from: start.0, to: p, before: ms) }
         case "swipe":
             guard let from = point("x1", "y1"), let to = point("x2", "y2"),
                   let ms = o["ms"] as? Double, ms.isFinite, (50...2000).contains(ms) else { return }
-            operation = { try DeviceSession.shared.agentTouch(from: from, to: to, holdMs: UInt64(ms)) }
+            operation = { try DeviceSession.shared.glassesGesture(from: from, to: to, duration: UInt64(ms)) }
         case "nav":
             guard let action = o["action"] as? String else { return }
             switch action {
             case "home": operation = { try DeviceSession.shared.agentHome() }
-            case "back": operation = { try DeviceSession.shared.agentTouch(from: CGPoint(x: 0.005, y: 0.5), to: CGPoint(x: 0.8, y: 0.5), holdMs: 300) }
-            case "notifications": operation = { try DeviceSession.shared.agentTouch(from: CGPoint(x: 0.4, y: 0.005), to: CGPoint(x: 0.4, y: 0.8), holdMs: 400) }
-            case "recents": operation = { try DeviceSession.shared.agentHome(); Thread.sleep(forTimeInterval: 0.15); try DeviceSession.shared.agentHome() }
+            case "back": operation = { try DeviceSession.shared.glassesGesture(from: CGPoint(x: 0.005, y: 0.5), to: CGPoint(x: 0.8, y: 0.5)) }
+            case "notifications": operation = { try DeviceSession.shared.glassesGesture(from: CGPoint(x: 0.4, y: 0.005), to: CGPoint(x: 0.4, y: 0.8), duration: 400) }
+            case "recents": operation = { try DeviceSession.shared.glassesGesture(from: CGPoint(x: 0.5, y: 0.999), to: CGPoint(x: 0.5, y: 0.5), duration: 350, after: 650) }
             default: return
             }
         case "typeText":
@@ -378,10 +394,10 @@ import Security
             operation = { try DeviceSession.shared.agentType(text) }
         case "key":
             resultType = type
-            guard let key = o["key"] as? String, key == "Enter" else {
+            guard let key = o["key"] as? String, key == "Enter" || key == "Backspace" else {
                 rtc?.send(["type": "result", "of": type, "ok": false]); return
             }
-            operation = { try DeviceSession.shared.agentType("\n") }
+            operation = { try DeviceSession.shared.glassesKey(backspace: key == "Backspace") }
         case "switchApp": rtc?.send(["type": "result", "of": type, "ok": false]); return
         case "overviewApps": rtc?.send(["type": "overviewApps", "apps": []]); return
         default: return

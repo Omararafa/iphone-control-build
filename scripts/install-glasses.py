@@ -11,6 +11,7 @@ s = view.read_text()
 assert '@State private var showGlasses' not in s, 'Overlay already applied'
 s = s.replace('@State private var showSettings = false', '@State private var showSettings = false\n    @State private var showGlasses = false')
 s = s.replace('.sheet(isPresented: $showSettings)', '.sheet(isPresented: $showGlasses) { GlassesView() }\n        .sheet(isPresented: $showSettings)')
+s = s.replace('.onAppear { composerFocused = true }', '.onAppear { if UserDefaults.standard.bool(forKey: "showGlasses") { showGlasses = true } else { composerFocused = true } }')
 s = s.replace('ToolbarItemGroup(placement: .topBarTrailing) {', 'ToolbarItemGroup(placement: .topBarTrailing) {\n                    Button("Glasses", systemImage: "eyeglasses") { composerFocused = false; showGlasses = true }')
 view.write_text(s)
 # Prevent simultaneous agent and glasses gestures on the shared developer connection.
@@ -22,6 +23,21 @@ for signature in ['func run(prompt: String)', 'func runScript(_ script: String)'
     brace = s.index('{', start)
     s = s[:brace+1] + '\n        guard !GlassesBridge.shared.running else { return }' + s[brace+1:]
 agent.write_text(s)
+
+app = root / 'iPhoneUse' / 'App.swift'
+s = app.read_text()
+s = s.replace('if !PhoneAgent.shared.isRunning {', 'if !PhoneAgent.shared.isRunning && !GlassesBridge.shared.running {')
+app.write_text(s)
+
+connection = root / 'iPhoneUse' / 'Device' / 'Connection.swift'
+s = connection.read_text()
+s = s.replace('if isReady && !force { return }', 'if force && GlassesBridge.shared.running { return }\n        if isReady && !force { return }')
+connection.write_text(s)
+
+for target, extra in [('idevice-patch/probe.rs', 'glasses-gesture.rs'),
+                      ('iPhoneUse/Device/DeviceSession+Services.swift', 'glasses-services.swift')]:
+    path = root / target
+    path.write_text(path.read_text() + (recipe / 'overlay' / extra).read_text())
 
 project = root / 'iPhoneUse.xcodeproj' / 'project.pbxproj'
 s = project.read_text()

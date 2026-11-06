@@ -50,7 +50,7 @@ struct GlassesView: View {
                     }
                 }
                 Section("Controls in this test build") {
-                    Text("Taps, swipes, Home and English keyboard text. Back is an edge swipe; Apps uses a double Home press. Drag is sent on release. App switching, Send, Backspace and non-English typing are not supported yet.")
+                    Text("Taps, swipes, Home, Backspace and English keyboard text. Back is an edge swipe; Apps swipes up and holds. Drag is sent on release. Direct app switching, Send and non-English typing are not supported yet.")
                         .font(.footnote)
                     Text("Build: iPhone Glasses 1").font(.caption).foregroundStyle(.secondary)
                     Button("Forget paired glasses", role: .destructive) { bridge.forgetGlasses() }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import Foundation
 import UIKit
+import CoreVideo
 import WebRTC
 
 /// Video only. No microphone, camera, or device identifiers are sent.

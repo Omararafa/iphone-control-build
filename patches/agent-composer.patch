@@ -1,0 +1,67 @@
+diff --git a/iPhoneUse/Agent/AgentView.swift b/iPhoneUse/Agent/AgentView.swift
+index 67d29a2..04ecae4 100644
+--- a/iPhoneUse/Agent/AgentView.swift
++++ b/iPhoneUse/Agent/AgentView.swift
+@@ -238,30 +238,43 @@ struct AgentView: View {
+         composerEnabled && (voice.state == .recording || voice.state == .idle && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+     }
+ 
+-    private var composer: some View {
++    @ViewBuilder
++    private var composerInput: some View {
++        if voice.state == .idle {
++            TextField(agent.question == nil ? "Ask anything" : "Answer", text: $prompt, axis: .vertical)
++                .lineLimit(1...6)
++                .focused($composerFocused)
++                .frame(minHeight: 34)
++                .padding(.leading, 6)
++        } else {
++            Waveform(meter: voice.meter, transcribing: voice.state == .transcribing)
++        }
++    }
++
++    private var composerSendButton: some View {
++        Button(action: send) {
++            Image(systemName: "arrow.up")
++                .font(.system(size: 15, weight: .bold))
++                .foregroundStyle(Color(.systemBackground))
++                .frame(width: 34, height: 34)
++                .background(Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.4)))
++        }
++        .disabled(!canSend)
++        .accessibilityLabel(agent.question == nil ? "Send" : "Send answer")
++    }
++
++    private var composerRow: some View {
+         HStack(alignment: .bottom, spacing: 8) {
+-            if voice.state == .idle {
+-                TextField(agent.question == nil ? "Ask anything" : "Answer", text: $prompt, axis: .vertical)
+-                    .lineLimit(1...6)
+-                    .focused($composerFocused)
+-                    .frame(minHeight: 34)
+-                    .padding(.leading, 6)
+-            } else {
+-                Waveform(meter: voice.meter, transcribing: voice.state == .transcribing)
+-            }
++            composerInput
+             if composerEnabled {
+                 MicButton(voice: voice, enabled: llm.voiceAvailable) { finishVoice(send: $0) }
+             }
+-            Button(action: send) {
+-                Image(systemName: "arrow.up")
+-                    .font(.system(size: 15, weight: .bold))
+-                    .foregroundStyle(Color(.systemBackground))
+-                    .frame(width: 34, height: 34)
+-                    .background(Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.4)))
+-            }
+-            .disabled(!canSend)
+-            .accessibilityLabel(agent.question == nil ? "Send" : "Send answer")
++            composerSendButton
+         }
++    }
++
++    private var composer: some View {
++        composerRow
+         .padding(.horizontal, 6)
+         .padding(.vertical, 10)
+         .padding(.leading, 8)

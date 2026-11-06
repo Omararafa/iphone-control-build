@@ -27,6 +27,14 @@ jobs:
           persist-credentials: false
       - name: Apply compiler compatibility patch
         run: git apply build-recipe/patches/agent-composer.patch
+      - name: Apply glasses companion and test pairing interoperability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 build-recipe/scripts/install-glasses.py
+          cp build-recipe/tests/trust-main.swift "$RUNNER_TEMP/main.swift"
+          swiftc iPhoneUse/Glasses/GlassesTrust.swift "$RUNNER_TEMP/main.swift" -o "$RUNNER_TEMP/trust-tests"
+          "$RUNNER_TEMP/trust-tests"
       - name: Prepare Rust for iOS
         shell: bash
         run: |
